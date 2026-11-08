@@ -146,7 +146,29 @@ A host's default shell (empty means the server user's login shell) is used for e
 | Shift PageUp / PageDown, wheel | Scroll local history |
 | Ctrl + / Ctrl − / Ctrl 0 | Enlarge / shrink / reset the whole interface |
 
-These chords are reserved by the client and do not reach terminal programs; every other key goes to the focused pane. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
+These are the defaults. Shortcuts are client-wide preferences in `keybindings` in `$XDG_CONFIG_HOME/rex-linux/workspace.json` (normally `~/.config/rex-linux/workspace.json`). They stay the same across all servers. New workspace files include the full default `keybindings` list for editing. Older files without this field or with an empty list gain the defaults on their next save; existing custom lists are preserved. Close Rex Linux before editing the file, then restart it to load the changes. Settings → Shortcuts is a read-only view of the resolved bindings and the configuration path.
+
+Add entries to the existing settings object, preserving its other fields:
+
+```json
+"keybindings": [
+  {"key": "ctrl+shift+d", "action": "pane.split", "args": {"direction": "down"}},
+  {"key": "ctrl+k", "action": null},
+  {"key": "ctrl+b>c", "action": "client.tab.new"},
+  {"key": "ctrl+b>z", "action": "pane.zoom"},
+  {"key": "ctrl+b>ctrl+b", "action": "pane.send_key", "args": {"key": "ctrl+b"}}
+]
+```
+
+Entries apply in order; the last entry for a chord or sequence wins. `"action": null` removes that exact binding, including a default, so the key reaches the terminal. Removing `ctrl+b` does not remove sequences starting with it. An empty or absent `keybindings` list keeps all defaults. To move a shortcut to another chord, set the old chord’s action to `null` and add the new binding. Invalid keys, unknown client actions and missing required arguments are rejected when loading the file.
+
+Sequences use Rex's `>` syntax and can have any number of steps. Prefixes are consumed, Escape cancels, and an unmatched final key goes to the terminal. The newer binding decides whether a shared prefix starts a sequence or immediately runs an action. Sequences reset on host/pane/session changes, opening a dialog and window focus loss. Server keymaps and server Lua shortcut functions are not used; terminal keys go directly to the block. Key modes are not implemented.
+
+Keys follow the unshifted character in your keyboard layout; bracketed W3C codes such as `ctrl+[KeyA]` bind a physical position. Modifier aliases follow Rex: `cmd`/`super`/`meta`/`win` mean the Super key on Linux, separate from `ctrl`; `control` means Ctrl, and `opt`/`option` mean Alt. Modifier order and case do not matter.
+
+The client supports these actions: `session.switch`, `session.new`, `client.commands`, `client.settings`, `client.sidebar.toggle`, `client.tab.new`, `client.tab.next`, `client.tab.previous`, `pane.split` (`direction`: `right` or `down`), `pane.focus` (`direction`), `pane.close`, `pane.zoom`, `pane.actions`, `pane.copy`, `pane.paste`, `pane.reconnect`, `pane.scroll` (`lines`), `pane.send_key` (`key`), and `client.zoom.in`, `client.zoom.out`, `client.zoom.reset`.
+
+Workspace bindings run when no dialog is open; interface zoom is also available in dialogs. Interface zoom changes in 10% steps (70–150%), is saved as `ui_scale`, and is independent of the terminal font size. `Ctrl =` and the numpad `+`/`−` also work.
 
 Double-click selects a word (including shell paths), and triple-click selects a line. Selection stays attached to terminal content as history or output scrolls; dragging above or below the grid autoscrolls. Hold Shift to select locally or scroll local history when a fullscreen TUI owns the mouse. Without Shift, ordinary TUI mouse reporting is unchanged.
 

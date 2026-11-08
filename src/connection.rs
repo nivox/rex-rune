@@ -84,6 +84,8 @@ fn parse_font_size(value: &str) -> std::result::Result<f32, String> {
 pub enum Command {
     Selection(crate::terminal::selection::Input),
     Key(Value),
+    /// Client-local key routing: bypass server Lua shortcuts.
+    RawKey(Value),
     Paste(String),
     /// A `block.event` mouse payload: `action`, `button`, `x`, `y` (cells) and `mods`.
     Mouse(Value),
@@ -1523,7 +1525,7 @@ async fn handle_command(
                     }
                     // Releases, pointer motion and wheel turns never claim the block; presses do.
                     let passive = match &input {
-                        Command::Key(key) => key["action"] == "release",
+                        Command::Key(key) | Command::RawKey(key) => key["action"] == "release",
                         Command::Mouse(mouse) => mouse["action"] != "press",
                         Command::Wheel(_) => true,
                         _ => false,
@@ -1557,13 +1559,15 @@ async fn handle_command(
                     {
                         let _ = worker.commands.send(DataCommand::Bottom);
                     }
-                    if matches!(input, Command::Key(_) | Command::Paste(_))
-                        && let Some(connection) = shared
-                            .model
-                            .lock()
-                            .expect("host model")
-                            .terminals
-                            .get(&block)
+                    if matches!(
+                        input,
+                        Command::Key(_) | Command::RawKey(_) | Command::Paste(_)
+                    ) && let Some(connection) = shared
+                        .model
+                        .lock()
+                        .expect("host model")
+                        .terminals
+                        .get(&block)
                     {
                         connection
                             .model
@@ -1572,6 +1576,9 @@ async fn handle_command(
                             .input_events += 1;
                     }
                     match input {
+                        Command::RawKey(key) => {
+                            request(control, "block.event", json!({"session_id":session,"block_id":block,"event":{"type":"key","payload":key}})).await?;
+                        }
                         Command::Key(key) => {
                             request(
                                 control,

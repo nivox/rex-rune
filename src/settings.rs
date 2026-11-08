@@ -125,6 +125,8 @@ impl From<TerminalThemeChoice> for String {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Ordered client-wide shortcut overrides; null actions unbind defaults.
+    pub keybindings: Vec<crate::keymap::Keybinding>,
     pub hosts: Vec<Host>,
     pub last_host: Option<String>,
     pub sessions: HashMap<String, String>,
@@ -153,6 +155,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            keybindings: crate::keymap::default_keybindings(),
             hosts: vec![Host {
                 label: std::fs::read_to_string("/etc/hostname")
                     .unwrap_or_else(|_| "Local".into())
@@ -212,6 +215,10 @@ impl Settings {
         );
         (settings.font_family, settings.font_fallbacks) =
             normalize_font_preferences(&settings.font_family, &settings.font_fallbacks)?;
+        if settings.keybindings.is_empty() {
+            settings.keybindings = crate::keymap::default_keybindings();
+        }
+        crate::keymap::resolve(&settings.keybindings).context("Invalid keybindings")?;
         settings.font_size = settings.font_size.clamp(8., 48.);
         settings.sidebar_width = settings.sidebar_width.clamp(200., 360.);
         settings.ui_scale = normalize_ui_scale(settings.ui_scale);
@@ -405,5 +412,84 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "chrome_theme": "solarized_light" }))
                 .unwrap();
         assert_eq!(s.chrome_theme, ChromeTheme::Midnight);
+    }
+}
+
+#[cfg(test)]
+mod keybinding_tests {
+    use super::*;
+    #[test]
+    fn generated_workspace_includes_editable_defaults_and_action_arguments() {
+        let path = std::env::temp_dir().join(format!(
+            "rex-default-keybindings-{}.json",
+            std::process::id()
+        ));
+        let settings = Settings::default();
+        settings.save(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let bindings = saved["keybindings"].as_array().unwrap();
+        assert_eq!(bindings.len(), crate::keymap::defaults().len());
+        assert!(
+            bindings
+                .iter()
+                .any(|b| b["key"] == "ctrl+k" && b["action"] == "session.switch")
+        );
+        assert!(
+            bindings
+                .iter()
+                .any(|b| b["key"] == "ctrl+shift+d" && b["args"]["direction"] == "right")
+        );
+        assert!(
+            bindings
+                .iter()
+                .any(|b| b["key"] == "shift+pageup" && b["args"]["lines"] == -20)
+        );
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(
+            crate::keymap::resolve(&loaded.keybindings).unwrap().len(),
+            bindings.len()
+        );
+        // Files generated before defaults were written explicitly used an empty list.
+        std::fs::write(&path, br#"{"keybindings": []}"#).unwrap();
+        Settings::load(&path).unwrap().save(&path).unwrap();
+        let upgraded: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(upgraded["keybindings"], saved["keybindings"]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn local_keybindings_survive_saving_other_preferences_and_reloading() {
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "keybindings": [
+                {"key":"ctrl+k", "action":null},
+                {"key":"ctrl+b>c", "action":"client.tab.new"}
+            ]
+        }))
+        .unwrap();
+        settings.ui_scale = 1.2;
+        let path =
+            std::env::temp_dir().join(format!("rex-keybindings-{}.json", std::process::id()));
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(&loaded.keybindings).unwrap(),
+            serde_json::to_value(&settings.keybindings).unwrap()
+        );
+        assert_eq!(loaded.ui_scale, 1.2);
+        settings.keybindings[1].key = "ctrl+b>".into();
+        settings.save(&path).unwrap();
+        assert!(Settings::load(&path).is_err());
+        std::fs::remove_file(path).unwrap();
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            serde_json::to_value(&old.keybindings).unwrap(),
+            serde_json::to_value(crate::keymap::default_keybindings()).unwrap()
+        );
+        assert_eq!(
+            crate::keymap::resolve(&old.keybindings).unwrap().len(),
+            crate::keymap::defaults().len()
+        );
     }
 }

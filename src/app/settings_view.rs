@@ -8,56 +8,7 @@ use super::{
 };
 use rex_linux::settings::{NoticePosition, NotificationsConfig};
 use rune::{Cursor, El, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{IconButton, Keybind, SegmentedControl, Switch};
-
-/// A chord's keys and what it does.
-type Shortcut = (&'static [&'static str], &'static str);
-
-/// Every workspace shortcut, grouped as Settings → Shortcuts lists them.
-const SHORTCUTS: &[(&str, &[Shortcut])] = &[
-    (
-        "Navigate",
-        &[
-            (&["Ctrl", "K"], "Switch session"),
-            (&["Ctrl", "Shift", "P"], "Commands"),
-            (&["Ctrl", ","], "Settings"),
-            (&["Ctrl", "PageUp"], "Previous tab"),
-            (&["Ctrl", "PageDown"], "Next tab"),
-            (&["Ctrl", "Alt", "Arrows"], "Move pane focus"),
-            (&["Ctrl", "Shift", "B"], "Toggle sidebar"),
-        ],
-    ),
-    (
-        "Create and close",
-        &[
-            (&["Ctrl", "Shift", "N"], "New session"),
-            (&["Ctrl", "Shift", "T"], "New tab"),
-            (&["Ctrl", "Shift", "D"], "Split right"),
-            (&["Ctrl", "Alt", "D"], "Split down"),
-            (&["Ctrl", "Shift", "W"], "Close pane or tab"),
-        ],
-    ),
-    (
-        "Panes",
-        &[
-            (&["Ctrl", "Shift", "Enter"], "Zoom pane"),
-            (&["Ctrl", "Shift", "Space"], "Pane actions"),
-            (&["Ctrl", "Shift", "R"], "Resume terminal"),
-        ],
-    ),
-    (
-        "Text and view",
-        &[
-            (&["Ctrl", "Shift", "C"], "Copy"),
-            (&["Ctrl", "Shift", "V"], "Paste"),
-            (&["Shift", "PageUp"], "Scroll history up"),
-            (&["Shift", "PageDown"], "Scroll history down"),
-            (&["Ctrl", "+"], "Enlarge interface"),
-            (&["Ctrl", "−"], "Shrink interface"),
-            (&["Ctrl", "0"], "Reset interface zoom"),
-        ],
-    ),
-];
+use rune_kit::{IconButton, SegmentedControl, Switch};
 
 /// A labelled setting: name and optional explanation on the left, its control on the right.
 pub(super) fn setting(label: &str, detail: &str, control: El) -> El {
@@ -470,29 +421,37 @@ fn hosts(s: &Workspace) -> El {
     )
 }
 
-fn shortcuts() -> El {
-    let k = kit();
-    let mut body = col().gap(4.);
-    for (name, list) in SHORTCUTS {
-        body = body.child(group(name));
-        for (keys, label) in *list {
-            body = body.child(
-                row()
-                    .h(30.)
-                    .gap(12.)
-                    .center_y()
-                    .child(el().w(190.).child(Keybind::new(keys).build(k)))
-                    .child(text(*label).font(ui(12.5)).color(rgb(ink()))),
-            );
-        }
-    }
-    body.child(
-        text("These are reserved by Rex; every other key goes to the focused terminal.")
-            .font(ui(11.5))
+fn shortcuts(s: &Workspace) -> El {
+    let mut body = col().gap(8.).child(text("Configure keybindings in the client settings file, then restart Rex Linux. These bindings apply to every host.").font(ui(12.)).color(rgb(muted())).wrap());
+    body = body.child(
+        text(s.settings_path.display().to_string())
+            .font(ui(12.))
             .color(rgb(muted()))
-            .wrap()
-            .mt(12.),
-    )
+            .selectable(true),
+    );
+    for binding in super::bindings::bindings(s) {
+        body = body.child(
+            row()
+                .gap(12.)
+                .child(
+                    text(binding.keys.join(" > "))
+                        .font(ui(12.))
+                        .color(rgb(ink()))
+                        .w(220.),
+                )
+                .child(
+                    text(format!(
+                        "{} {}",
+                        binding.action,
+                        binding.args.map_or(String::new(), |a| a.to_string())
+                    ))
+                    .font(ui(12.))
+                    .color(rgb(ink()))
+                    .wrap(),
+                ),
+        );
+    }
+    body
 }
 
 fn nav(s: &Workspace) -> El {
@@ -554,7 +513,7 @@ pub fn settings(s: &Workspace, viewport: [f32; 2]) -> El {
         SettingsSection::Notifications => notifications(s),
         SettingsSection::Integrations => super::integrations::section(s),
         SettingsSection::Hosts => hosts(s),
-        SettingsSection::Shortcuts => shortcuts(),
+        SettingsSection::Shortcuts => shortcuts(s),
     };
     let content = col()
         .grow(1.)

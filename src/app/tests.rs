@@ -2676,3 +2676,208 @@ fn files_dropped_on_a_pane_upload_there_and_focus_it() {
     );
     std::fs::remove_file(&rt.state.settings_path).ok();
 }
+
+#[test]
+fn configured_shortcuts_replace_defaults_and_unbinding_does_not_restore_them() {
+    let mut ws = workspace();
+    ws.settings.keybindings = serde_json::from_value(serde_json::json!([
+        {"key":"ctrl+k", "action":"client.sidebar.toggle"}
+    ]))
+    .unwrap();
+    let mut rt = runtime(ws);
+    let key = KeyEvent {
+        key: Key::Command('k'),
+        mods: Mods {
+            ctrl: true,
+            ..Default::default()
+        },
+    };
+    assert!(!rt.state.sidebar.is_open());
+    rt.key(key.clone());
+    rt.frame(1. / 60.);
+    assert!(rt.state.sidebar.is_open());
+    assert!(
+        rt.state.panel.is_none(),
+        "the overridden switcher must not open"
+    );
+    rt.state.settings.keybindings = serde_json::from_value(serde_json::json!([
+        {"key":"ctrl+k", "action":null}
+    ]))
+    .unwrap();
+    rt.key(key);
+    rt.frame(1. / 60.);
+    assert!(rt.state.sidebar.is_open());
+    assert!(
+        rt.state.panel.is_none(),
+        "an unbound key must not fall back to its default"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn sequence_prefix_hides_a_default_and_dialogs_cancel_pending_sequences() {
+    let mut ws = workspace();
+    ws.settings.keybindings = serde_json::from_value(serde_json::json!([
+        {"key":"ctrl+k>b", "action":"client.sidebar.toggle"}
+    ]))
+    .unwrap();
+    let mut rt = runtime(ws);
+    let prefix = KeyEvent {
+        key: Key::Command('k'),
+        mods: Mods {
+            ctrl: true,
+            ..Default::default()
+        },
+    };
+    let suffix = KeyEvent {
+        key: Key::Text("b".into()),
+        mods: Mods::default(),
+    };
+    rt.key(prefix.clone());
+    rt.frame(1. / 60.);
+    assert!(rt.state.panel.is_none());
+    assert!(!rt.state.sidebar.is_open());
+    rt.key(suffix.clone());
+    rt.frame(1. / 60.);
+    assert!(rt.state.sidebar.is_open());
+    rt.key(prefix);
+    rt.frame(1. / 60.);
+    rt.state.open_panel(
+        PanelKind::Form(Form::RenameSession(None)),
+        "Rename session",
+        &[("Name", "", "")],
+    );
+    rt.state.panel = None;
+    rt.key(suffix);
+    rt.frame(1. / 60.);
+    assert!(
+        rt.state.sidebar.is_open(),
+        "a stale sequence must not toggle the sidebar"
+    );
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}
+
+#[test]
+fn local_sequences_send_keys_directly_to_the_terminal() {
+    use rex_linux::connection::{Command, Connection, TerminalSender};
+    let (mut ws, _) = tabbed_workspace("split");
+    let block = ws.focused_block().unwrap();
+    let (sender, sent) = flume::unbounded();
+    let connection = Connection {
+        model: Default::default(),
+        commands: TerminalSender::new(sender, "s".into(), block.clone()),
+        wake: flume::unbounded().1,
+    };
+    {
+        let mut model = connection.model.lock().unwrap();
+        model.connected = true;
+        model.control_connected = true;
+    }
+    ws.terminals
+        .insert(ws.term_key(&block), super::term::Term::new(connection));
+    ws.settings.keybindings = serde_json::from_value(serde_json::json!([
+        {"key":"ctrl+b>c", "action":"pane.send_key", "args":{"key":"ctrl+b"}}
+    ]))
+    .unwrap();
+    let mut tx = rune::Tx::default();
+    super::input::on_key(
+        &mut ws,
+        &KeyEvent {
+            key: Key::Command('b'),
+            mods: Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+        },
+        &mut tx,
+    );
+    assert!(sent.is_empty(), "the prefix must remain local");
+    super::input::on_key(
+        &mut ws,
+        &KeyEvent {
+            key: Key::Text("c".into()),
+            mods: Mods::default(),
+        },
+        &mut tx,
+    );
+    let HostCommand::Terminal {
+        command: Command::RawKey(payload),
+        ..
+    } = sent.try_recv().unwrap()
+    else {
+        panic!("expected final key");
+    };
+    assert_eq!(payload["key"], "key_b");
+    assert_eq!(payload["mods"], "ctrl");
+    let HostCommand::Terminal {
+        command: Command::RawKey(release),
+        ..
+    } = sent.try_recv().unwrap()
+    else {
+        panic!("expected release");
+    };
+    assert_eq!(release["action"], "release");
+    assert!(sent.is_empty());
+    // Synthetic keys go straight to the terminal, including a sequence prefix key itself.
+    super::input::send_key(&mut ws, "ctrl+b");
+    super::input::send_key(&mut ws, "shift+5");
+    let keys: Vec<_> = sent
+        .try_iter()
+        .map(|c| {
+            let HostCommand::Terminal {
+                command: Command::RawKey(payload),
+                ..
+            } = c
+            else {
+                panic!();
+            };
+            payload
+        })
+        .collect();
+    assert_eq!(keys.len(), 4);
+    assert_eq!(keys[0]["mods"], "ctrl");
+    assert_eq!(keys[1]["action"], "release");
+    assert_eq!(keys[2]["text"], "%");
+    assert_eq!(keys[2]["unshifted_codepoint"], '5' as u32);
+    assert_eq!(keys[3]["text"], "");
+    std::fs::remove_file(&ws.settings_path).ok();
+}
+
+#[test]
+fn client_keybindings_stay_the_same_when_switching_hosts() {
+    let mut ws = workspace_hosts(2);
+    ws.settings.keybindings = serde_json::from_value(serde_json::json!([
+        {"key":"ctrl+k", "action":"client.sidebar.toggle"},
+        {"key":"ctrl+b>z", "action":"client.sidebar.toggle"}
+    ]))
+    .unwrap();
+    let mut rt = runtime(ws);
+    let key = KeyEvent {
+        key: Key::Command('k'),
+        mods: Mods {
+            ctrl: true,
+            ..Default::default()
+        },
+    };
+    rt.key(key.clone());
+    rt.frame(1. / 60.);
+    assert!(rt.state.sidebar.is_open());
+    rt.state.activate_host(1, &mut rune::Tx::default());
+    rt.key(key);
+    rt.frame(1. / 60.);
+    assert!(!rt.state.sidebar.is_open());
+    assert!(rt.state.panel.is_none());
+    // A prefix started on one host must not complete on another.
+    rt.key(KeyEvent {
+        key: Key::Command('b'),
+        mods: Mods {
+            ctrl: true,
+            ..Default::default()
+        },
+    });
+    rt.frame(1. / 60.);
+    rt.state.activate_host(0, &mut rune::Tx::default());
+    press(&mut rt, Key::Text("z".into()));
+    assert!(!rt.state.sidebar.is_open());
+    std::fs::remove_file(&rt.state.settings_path).ok();
+}

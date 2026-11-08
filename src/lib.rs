@@ -7,3 +7,5 @@ pub mod terminal_theme;
 pub mod transport;
 pub mod upload;
 pub mod wire;
+
+pub mod keymap;

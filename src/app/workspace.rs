@@ -70,6 +70,9 @@ pub struct Workspace {
     pub drag: Option<DividerDrag>,
     /// Physical keys whose press went to a terminal; only their releases follow.
     pub forwarded: HashSet<PhysicalKeyCode>,
+    pub consumed_keys: HashSet<PhysicalKeyCode>,
+    pub sequence: super::bindings::Sequence,
+    pub binding_context: Option<String>,
     /// Panes this window has taken size ownership of since it last came forward.
     pub claimed: HashSet<(HostId, String)>,
     pub handle: AppHandle<Workspace>,
@@ -189,6 +192,9 @@ impl Workspace {
             zoom_notice: None,
             drag: None,
             forwarded: HashSet::new(),
+            consumed_keys: HashSet::new(),
+            sequence: Default::default(),
+            binding_context: None,
             claimed: HashSet::new(),
             handle,
             window_focused: true,
@@ -365,6 +371,9 @@ impl Workspace {
             let clipboard = shared.clipboard.take();
             (shared.clone(), notices, clipboard)
         };
+        if index == self.active && (model.selected != old_session || !model.connected) {
+            self.sequence.clear();
+        }
         for (block, connection) in &model.terminals {
             let key = (id, block.clone());
             if !self.terminals.contains_key(&key) {
@@ -474,6 +483,8 @@ impl Workspace {
     pub fn window_focus(&mut self, focused: bool) {
         self.window_focused = focused;
         if !focused {
+            self.sequence.clear();
+            self.consumed_keys.clear();
             for term in self.terminals.values_mut() {
                 term.end_selection();
             }
@@ -673,6 +684,9 @@ impl Workspace {
     }
 
     pub fn request(&mut self, method: &str, mut payload: Value) {
+        if method.starts_with("session.focus") {
+            self.sequence.clear();
+        }
         let Some(session) = self.model().selected.clone() else {
             return;
         };
@@ -814,6 +828,7 @@ impl Workspace {
     }
 
     pub fn update_visibility(&mut self) {
+        self.sequence.clear();
         for term in self.terminals.values_mut() {
             term.end_selection();
         }
@@ -1345,6 +1360,7 @@ impl Workspace {
     }
 
     pub fn open_panel(&mut self, kind: PanelKind, title: &str, fields: &[(&str, &str, &str)]) {
+        self.sequence.clear();
         for term in self.terminals.values_mut() {
             term.end_selection();
         }

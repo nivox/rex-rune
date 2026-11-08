@@ -10,49 +10,9 @@ use super::{
 };
 use rex_linux::connection::Command;
 use rune::{Ime, Key, KeyEvent, PhysicalKeyCode as Code, Tx};
-use serde_json::json;
 
 fn ctrl(ev: &KeyEvent) -> bool {
     ev.mods.ctrl || ev.mods.cmd
-}
-
-fn letter(ev: &KeyEvent, tx: &Tx, c: char) -> bool {
-    let code = match c {
-        'b' => Code::KeyB,
-        'c' => Code::KeyC,
-        'd' => Code::KeyD,
-        'k' => Code::KeyK,
-        'n' => Code::KeyN,
-        'p' => Code::KeyP,
-        'r' => Code::KeyR,
-        't' => Code::KeyT,
-        'v' => Code::KeyV,
-        'w' => Code::KeyW,
-        _ => return false,
-    };
-    // By the character the key types (Dvorak's Ctrl T is where QWERTY's K is), falling back
-    // to its position on layouts without Latin letters.
-    match tx.key_base() {
-        Some(base) if base.is_ascii_alphabetic() => base.eq_ignore_ascii_case(&c),
-        Some(_) => tx.physical_key() == Some(code),
-        None => {
-            ev.is_command(c)
-                || matches!(&ev.key, Key::Text(t) if t.eq_ignore_ascii_case(&c.to_string()))
-                || tx.physical_key() == Some(code)
-        }
-    }
-}
-
-/// Ctrl , by the character the key types, falling back to its position.
-fn comma(ev: &KeyEvent, tx: &Tx) -> bool {
-    let typed = match &ev.key {
-        Key::Command(c) => *c == ',',
-        Key::Text(t) => t == ",",
-        _ => false,
-    };
-    typed
-        || (tx.key_base().is_none_or(|b| !b.is_ascii_punctuation())
-            && tx.physical_key() == Some(Code::Comma))
 }
 
 fn space(ev: &KeyEvent, tx: &Tx) -> bool {
@@ -61,99 +21,9 @@ fn space(ev: &KeyEvent, tx: &Tx) -> bool {
         || matches!(&ev.key, Key::Text(t) if t == " ")
 }
 
-/// Global, including focused form/query fields. Logical punctuation respects the keyboard
-/// layout; numpad operators and unshifted Digit0 also work without AltGr interception.
+/// Zoom bindings are also available in forms and popups.
 pub fn zoom_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if !ctrl(ev) || ev.mods.alt {
-        return false;
-    }
-    let ch = match &ev.key {
-        Key::Command(c) => Some(*c),
-        Key::Text(t) if t.chars().count() == 1 => t.chars().next(),
-        _ => None,
-    };
-    let step = match (ch, tx.physical_key()) {
-        (Some('+' | '='), _) | (_, Some(Code::NumpadAdd)) => 1,
-        (Some('-'), _) | (_, Some(Code::NumpadSubtract)) => -1,
-        (Some('0'), _) | (_, Some(Code::Numpad0)) => 0,
-        (_, Some(Code::Digit0)) if !ev.mods.shift => 0,
-        _ => return false,
-    };
-    s.change_ui_scale(step, tx);
-    true
-}
-
-/// Workspace shortcuts with no popup open. True when one ran.
-fn shortcut(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    let m = ev.mods;
-    if ctrl(ev) && m.shift && !m.alt {
-        if letter(ev, tx, 'b') {
-            s.perform(Intent::Sidebar, tx);
-        } else if letter(ev, tx, 'p') {
-            s.picker(false);
-        } else if letter(ev, tx, 'n') {
-            s.perform(Intent::NewSession, tx);
-        } else if letter(ev, tx, 't') {
-            s.perform(Intent::NewWindow, tx);
-        } else if letter(ev, tx, 'w') {
-            s.close_focused(tx);
-        } else if letter(ev, tx, 'd') {
-            s.perform(Intent::Split("horizontal"), tx);
-        } else if ev.key == Key::Enter {
-            s.perform(Intent::Zoom, tx);
-        } else if space(ev, tx) {
-            if let Some(block) = s.focused_block() {
-                s.pane_menu(block, None);
-            }
-        } else if letter(ev, tx, 'c') {
-            if let Some(text) = s.active_terminal().and_then(|t| t.copy_text()) {
-                tx.copy(text);
-            }
-        } else if letter(ev, tx, 'v') {
-            s.paste_clipboard(tx);
-        } else if letter(ev, tx, 'r') {
-            if let Some(term) = s.active_terminal_mut() {
-                term.send(Command::Reconnect);
-            }
-        } else {
-            return false;
-        }
-        return true;
-    }
-    if ctrl(ev) && !m.shift && !m.alt && letter(ev, tx, 'k') {
-        s.picker(true);
-    } else if ctrl(ev) && !m.shift && !m.alt && comma(ev, tx) {
-        s.perform(Intent::Settings, tx);
-    } else if ctrl(ev) && m.alt && !m.shift && letter(ev, tx, 'd') {
-        s.perform(Intent::Split("vertical"), tx);
-    } else if m.alt
-        && ctrl(ev)
-        && !m.shift
-        && matches!(ev.key, Key::Left | Key::Right | Key::Up | Key::Down)
-    {
-        let direction = match ev.key {
-            Key::Left => "left",
-            Key::Right => "right",
-            Key::Up => "up",
-            _ => "down",
-        };
-        s.request("session.focus_direction", json!({"direction":direction}));
-    } else if ctrl(ev) && !m.shift && matches!(ev.key, Key::PageUp | Key::PageDown) {
-        let method = if ev.key == Key::PageUp {
-            "session.focus_previous_window"
-        } else {
-            "session.focus_next_window"
-        };
-        s.request(method, json!({}));
-    } else if m.shift && !ctrl(ev) && matches!(ev.key, Key::PageUp | Key::PageDown) {
-        let lines = if ev.key == Key::PageUp { -20 } else { 20 };
-        if let Some(term) = s.active_terminal_mut() {
-            term.send(Command::Scroll(lines));
-        }
-    } else {
-        return false;
-    }
-    true
+    super::bindings::on_key(s, ev, tx, true)
 }
 
 /// Keys a list popup (switcher, Commands, host step, pane menu) takes, from its field or root.
@@ -210,10 +80,10 @@ pub fn rename_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if zoom_key(s, ev, tx) {
+    let code = tx.physical_key();
+    if s.panel.is_some() && zoom_key(s, ev, tx) {
         return true;
     }
-    let code = tx.physical_key();
     if let Some(panel) = &s.panel {
         if panel.is_list() && tx.focused().is_none() {
             return list_key(s, ev, tx);
@@ -224,7 +94,7 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return false;
     }
-    if shortcut(s, ev, tx) {
+    if super::bindings::on_key(s, ev, tx, false) {
         return true;
     }
     if tx.focused().is_some() {
@@ -245,7 +115,7 @@ pub fn on_key(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     term.clear_selection();
     if let Some(payload) = keys::payload(ev, code, base, action) {
-        term.send(Command::Key(payload));
+        term.send(Command::RawKey(payload));
         if let Some(code) = code {
             s.forwarded.insert(code);
         }
@@ -259,6 +129,7 @@ pub fn on_key_up(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(code) = tx.physical_key() else {
         return false;
     };
+    s.consumed_keys.remove(&code);
     if !s.forwarded.remove(&code) {
         return s.panel.is_none();
     }
@@ -268,7 +139,7 @@ pub fn on_key_up(s: &mut Workspace, ev: &KeyEvent, tx: &mut Tx) -> bool {
         && term.status().live
         && let Some(payload) = keys::payload(ev, code, base, Action::Release)
     {
-        term.send(Command::Key(payload));
+        term.send(Command::RawKey(payload));
     }
     true
 }
@@ -288,4 +159,81 @@ pub fn on_ime(s: &mut Workspace, ime: &Ime, _: &mut Tx) -> bool {
         _ => {}
     }
     true
+}
+
+/// Send a synthetic key straight to the block, bypassing Lua bindings and local shortcuts.
+pub fn send_key(s: &mut Workspace, chord: &str) {
+    let mut mods = rune::Mods::default();
+    let parts: Vec<_> = chord.split('+').collect();
+    let Some(key) = parts.last() else {
+        return;
+    };
+    for modifier in &parts[..parts.len() - 1] {
+        match modifier.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods.ctrl = true,
+            "alt" | "opt" | "option" => mods.alt = true,
+            "shift" => mods.shift = true,
+            "cmd" | "command" | "super" | "meta" | "win" => mods.logo = true,
+            _ => {
+                s.notify("Invalid pane.send_key modifier");
+                return;
+            }
+        }
+    }
+    let key = match key.to_ascii_lowercase().as_str() {
+        "enter" => Key::Enter,
+        "escape" => Key::Escape,
+        "tab" => Key::Tab,
+        "backspace" => Key::Backspace,
+        "delete" => Key::Delete,
+        "left" => Key::Left,
+        "right" => Key::Right,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        "space" => Key::Text(" ".into()),
+        k if k.starts_with('f') && k[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) => {
+            Key::Function(k[1..].parse().unwrap())
+        }
+        k if k.chars().count() == 1 => Key::Text(k.into()),
+        _ => {
+            s.notify("Invalid pane.send_key key");
+            return;
+        }
+    };
+    let base = match &key {
+        Key::Text(t) => t.chars().next(),
+        _ => None,
+    };
+    if let Some(term) = s.active_terminal_mut().filter(|t| t.status().live) {
+        for action in [Action::Press, Action::Release] {
+            if let Some(mut payload) = keys::payload(
+                &KeyEvent {
+                    key: key.clone(),
+                    mods,
+                },
+                None,
+                base,
+                action,
+            ) {
+                if mods.shift
+                    && !mods.ctrl
+                    && !mods.logo
+                    && payload["action"] != "release"
+                    && let Some(base) = base
+                {
+                    let shifted = "`1234567890-=[]\\;',./"
+                        .chars()
+                        .zip("~!@#$%^&*()_+{}|:\"<>?".chars())
+                        .find_map(|(plain, shifted)| (plain == base).then_some(shifted))
+                        .unwrap_or_else(|| base.to_ascii_uppercase());
+                    payload["text"] = serde_json::json!(shifted.to_string());
+                }
+                term.send(Command::RawKey(payload));
+            }
+        }
+    }
 }
